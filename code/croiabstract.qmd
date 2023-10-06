@@ -1,0 +1,504 @@
+---
+title: "Benefits of using LF-LAM in the diagnosis of TB"
+format: html
+editor: visual
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+echo = FALSE,
+message = FALSE,
+warning = FALSE,
+cache = FALSE
+)
+
+# Load required packages
+pacman::p_load(
+  rio,
+  here,
+  tidyverse,
+  janitor,
+  geepack,
+  aod,
+  gtsummary,
+  labelled
+)
+
+theme_gtsummary_journal(journal = "jama")
+theme_gtsummary_compact()
+```
+
+```{r data}
+dfall <- 
+  
+  # Import & merge all excel files
+  import(here('data', 'table1.xlsx')) %>%
+  select(-c(Remark:updated_at)) %>%
+  mutate(id = as.numeric(id)) %>%
+  left_join(import(here('data', 'table2.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id),
+            by = 'id') %>%
+  left_join(import(here('data', 'table3.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table4.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table5.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table6.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table7.xlsx')) %>%
+              select(-c(id, created_at:isDeleted), id = patient_id) %>%
+              group_by(id) %>%
+              mutate(visit = row_number()) %>%
+              ungroup() %>%
+              pivot_wider(
+                names_from = visit,
+                values_from = VirologyCheck:ViralLoad,
+                names_vary = 'slowest'), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table8.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table843.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table9.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table10.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  left_join(import(here('data', 'table11.xlsx')) %>%
+              select(-c(id, Remark:updated_at), id = patient_id), 
+            by = 'id') %>%
+  
+  # Simplify variable names
+  clean_names() %>%
+  
+  # Summary of multiple variables (5 tb symptom 5, 5 lab results, 14 antibiotics)
+  rowwise() %>%
+  mutate(
+    # TB symptoms
+    tb_symptom = max(
+      c_across(num_range("criteria_2_1_", 1:5)) == 1, 
+      na.rm = TRUE
+    ),
+    # AFB
+    afb = max(
+      c_across(num_range("afb_check_result", 1:5)) == 2, 
+      na.rm = TRUE
+    ),
+    # Culture
+    culture =max(
+      c_across(num_range("tb_culture_check_result", 1:5)) == 2,
+      na.rm = TRUE
+    ),
+    # Xpert
+    xpert = max(
+      c_across(num_range("xpert_check_mtb_result", 1:5)) == 1,
+      na.rm = TRUE
+    ),
+    # Number of antibiotics
+    atb_num = sum(
+      c_across(c(empirical_antibiotic_drug_amoxicillin:empirical_antibiotic_drug_other) & 
+                 starts_with('empirical_antibiotic_drug_')),
+      na.rm = TRUE
+    ),
+    # Antibiotic start date
+    atb_start = min(
+      c_across(c(amoxicillin_start_date:other_start_date) & ends_with('_start_date')),
+      na.rm = TRUE
+    ),
+    # Antibiotic stop date
+    atb_stop = max(
+      c_across(c(amoxicillin_end_date:other_end_date) & ends_with('_end_date')),
+      na.rm = TRUE
+    ),
+  ) %>%
+  ungroup() %>%
+  
+  # Key variables
+  mutate(
+    tb_symptom = na_if(tb_symptom, -Inf),
+    afb = na_if(afb, -Inf),
+    culture = na_if(culture, -Inf),
+    xpert = na_if(xpert, -Inf),
+    # TB definition
+    tb_def = case_when(
+      # Definite TB
+      culture == 1 | xpert == 1                                                    ~ 1,
+      # Probable TB
+      (tb_symptom == 1 | afb == 1 | cxr_check_result == 2 | ct_check_result == 2) & 
+       antituberculosis_drugs_receive == 1 & tb_diagg_result != 5                  ~ 2,
+      # Not TB
+      TRUE                                                                         ~ 0 
+    ),
+    # TB diagnosis (mutually exclusive)
+    tb_diag = case_when(
+      disseminated_tb == 1                        ~ 3,
+      extra_pulmonary_tb == 1 & pulmonary_tb == 1 ~ 3,
+      extra_pulmonary_tb == 1                     ~ 2,
+      pulmonary_tb == 1                           ~ 1,
+      non_tb == 1                                 ~ 0,
+      TRUE                                        ~ NA_real_
+    ),
+    # TB yes/no
+    tb = factor(
+      case_when(
+        tb_def %in% 1:2 ~ 1,
+        TRUE            ~ 0
+      ),
+      levels = c(1, 0),
+      labels = c('Yes', 'No')
+    ),
+    # LAM +/-
+    lam = factor(
+      active_tb_alere_determine_test_result,
+      levels = c(2, 1),
+      labels = c('Positive', 'Negative')
+    ),
+    
+    # Baseline characteristics
+    across(where(is.POSIXct), ~ as.Date(.)),
+    ageatvisit = as.numeric(difftime(service_date, dob, units = "days")) / 365.25,
+    sex = factor(
+      sex,
+      levels = c(1, 2),
+      labels = c('Male', 'Female')
+    ),
+    nationgrp = factor(
+      case_when(nation == 1                ~ 1,
+                nation %in% c(2, 3, 4, 99) ~ 2,
+                TRUE                       ~ NA_real_),
+      levels = c(1, 2),
+      labels = c('Thai', 'Non-Thai')
+    ),
+    lengthart = as.numeric(difftime(
+      service_date,
+      coalesce(arv_start_date, arv_start_date2),
+      units = "days")) / 365.25,
+    
+    # Factors
+    atb = factor(
+      empirical_antibiotic_drug_receive,
+      levels = 1:0,
+      labels = c('Yes', 'No')
+    ),
+    atb_time = na_if(as.numeric(
+      difftime(atb_stop, atb_start, units = "days")
+    ),-Inf),
+    atb_timegrp = cut(
+      atb_time,
+      breaks = c(0, 4, Inf),
+      labels = c('< 5', '>= 5'),
+      include.lowest = TRUE
+    ),
+    atb_numgrp = cut(
+      atb_num,
+      breaks = c(0, 1, 2, Inf),
+      labels = c('1', '2', '>= 3')
+    ),
+    tx_time = as.numeric(
+      difftime(
+        antituberculosis_drugs_start_date,
+        active_tb_alere_determine_test_date,
+        units = "days"
+      )
+    ),
+    tx_timegrp = cut(
+      tx_time,
+      breaks = c(-Inf,-1, 3, 22, Inf),
+      labels = c(
+        'Start TB treatment before LAM result',
+        '0-3 days',
+        '4-22 days',
+        '>22 days'
+      )
+    ),
+    h_time = as.numeric(
+      difftime(
+        discharged_date,
+        service_date,
+        units = "days"
+      )
+    ),
+    h_timegrp = cut(
+      h_time,
+      breaks = c(-1, 3, 6, Inf),
+      labels = c(
+        '0-3 days',
+        '4-6 days',
+        '>=7 days'
+      )
+    ),
+    spu_cul = case_when(
+      (sample_type1 == 1 & tb_culture_check_result1 == 2) |
+      (sample_type2 == 1 & tb_culture_check_result2 == 2) |
+      (sample_type3 == 1 & tb_culture_check_result3 == 2) |
+      (sample_type4 == 1 & tb_culture_check_result4 == 2) |
+      (sample_type5 == 1 & tb_culture_check_result5 == 2) ~ 1,
+      (sample_type1 == 1 & tb_culture_check_result1 %in% c(1,3)) |
+      (sample_type2 == 1 & tb_culture_check_result2 %in% c(1,3)) |
+      (sample_type3 == 1 & tb_culture_check_result3 %in% c(1,3)) |
+      (sample_type4 == 1 & tb_culture_check_result4 %in% c(1,3)) |
+      (sample_type5 == 1 & tb_culture_check_result5 %in% c(1,3)) ~ 0,
+      TRUE ~ NA_real_
+    ),
+    bld_cul = case_when(
+      (sample_type1 == 3 & tb_culture_check_result1 == 2) |
+      (sample_type2 == 3 & tb_culture_check_result2 == 2) |
+      (sample_type3 == 3 & tb_culture_check_result3 == 2) |
+      (sample_type4 == 3 & tb_culture_check_result4 == 2) |
+      (sample_type5 == 3 & tb_culture_check_result5 == 2) ~ 1,
+      (sample_type1 == 3 & tb_culture_check_result1 %in% c(1,3)) |
+      (sample_type2 == 3 & tb_culture_check_result2 %in% c(1,3)) |
+      (sample_type3 == 3 & tb_culture_check_result3 %in% c(1,3)) |
+      (sample_type4 == 3 & tb_culture_check_result4 %in% c(1,3)) |
+      (sample_type5 == 3 & tb_culture_check_result5 %in% c(1,3)) ~ 0,
+      TRUE ~ NA_real_
+    ),
+    txres = factor(treatment_result,
+                  levels = c(1:4, 99),
+                  labels = c('Improve', 'Not improve', 'Refer', 'Dead', 'Other')),
+    dead = factor(ifelse(treatment_result == 4, 1, 0),
+                  levels = c(1, 0),
+                  labels = c('Dead', 'Alive'))
+  ) %>%
+  
+  # Variable labels
+  set_variable_labels(
+    lam          = 'LF-LAM',
+    ageatvisit   = "Age",
+    sex          = "Sex",
+    nationgrp    = "Nationality",
+    absolute_cd4 = "CD4 (cell/μL)",
+    lengthart    = 'Length in ART (year)',
+    atb          = "Antibiotic given",
+    atb_time     = "Time on antibiotic",
+    atb_timegrp  = "Time on antibiotic",
+    atb_numgrp   = "Number of antibiotic",
+    tx_time      = 'Time of start of TB treatment after LAM test',
+    tx_timegrp   = 'Time of start of TB treatment after LAM test',
+    h_time       = 'Length of stay',
+    h_timegrp    = 'Length of stay',
+    txres        = 'Treatment result',
+    dead         = 'Dead'
+  )
+
+dfinc <- dfall %>% 
+  # Exclude incomplete routine TB diagnosis
+  filter(!is.na(pulmonary_tb) | 
+         !is.na(extra_pulmonary_tb) | 
+         !is.na(disseminated_tb) |
+         !is.na(non_tb)) %>%
+  # Exclude conflicts between definition & diagnosis
+  filter((tb_def == 0 & non_tb == 1) |
+         (tb_def %in% 1:2 &
+           (pulmonary_tb == 1 | extra_pulmonary_tb == 1 | disseminated_tb == 1))) %>%
+  # Exclude missing lam 
+  filter(!is.na(lam)) %>%
+  # Exclude non-standard LF-LAM testing
+  filter(active_tb_alere_determine_test_result %in% 1:2) %>% 
+  # Exclude incomplete treatment information
+  filter((!is.na(antituberculosis_drugs_receive) | !tb_diag == 1))
+
+dfipd <- dfinc %>% 
+  filter(patient_type == 1)
+
+dfipdsnpt <- dfinc %>%
+  filter(patient_type == 1 &
+           afb == 0 &
+           tb_diag %in% c(1,3))
+```
+
+**Flow diagram**
+
+```{r flowchart}
+source(here('code','flowchart.R'))
+d
+```
+
+**Baseline characteristics of all IPD cases** (n=`r nrow(dfipd)`)
+
+```{r ipd}
+t1a <- tbl_summary(
+  dfipd %>% select(ageatvisit, sex, nationgrp, absolute_cd4, lengthart),
+  type = list(lengthart ~ 'continuous2'),
+  statistic = list(lengthart ~ c(
+    "{median} ({p25}, {p75})", "{mean} ({min}, {max})"
+  ))
+) %>%
+  bold_labels()
+t1a
+```
+
+**Baseline characteristics of IPD with sputum negative pulmonary TB** (n=`r nrow(dfipdsnpt)`)
+
+```{r ipdsnpt}
+t1b <- tbl_summary(
+  dfipdsnpt %>% select(ageatvisit, sex, nationgrp, absolute_cd4, lengthart),
+  type = list(lengthart ~ 'continuous2'),
+  statistic = list(lengthart ~ c(
+    "{median} ({p25}, {p75})", "{mean} ({min}, {max})"
+  ))
+) %>%
+  bold_labels()
+t1b
+```
+
+**Treatment and length of stay among IPD SNPT** (n=`r nrow(dfipdsnpt)`)
+
+```{r table1}
+t2a <- tbl_summary(
+  dfipdsnpt %>%
+    select(
+      lam,
+      atb,
+      atb_time,
+      atb_timegrp,
+      atb_numgrp,
+      tx_time,
+      tx_timegrp,
+      h_time,
+      h_timegrp,
+      txres,
+      dead
+    ),
+  by = lam,
+  type = list(all_continuous() ~ 'continuous2'),
+  statistic = list(
+    all_continuous() ~ c("{median} ({p25}, {p75})", "{mean} ({min}, {max})")
+  )
+) %>%
+  bold_labels() %>%
+  add_overall() %>%
+  add_p() %>%
+  bold_p()
+t2a
+```
+
+**Treatment and length of stay among IPD SNPT who start TB treatment after LAM result** (n=`r nrow(filter(dfipdsnpt, tx_time >= 0))`)
+
+```{r table2}
+t2b <- tbl_summary(
+  dfipdsnpt %>%
+    filter(tx_time >= 0) %>% 
+    select(
+      lam,
+      atb,
+      atb_time,
+      atb_timegrp,
+      atb_numgrp,
+      tx_time,
+      tx_timegrp,
+      h_time,
+      h_timegrp,
+      txres,
+      dead
+    ),
+  by = lam,
+  type = list(all_continuous() ~ 'continuous2'),
+  statistic = list(
+    all_continuous() ~ c("{median} ({p25}, {p75})", "{mean} ({min}, {max})")
+  )
+) %>%
+  bold_labels() %>%
+  add_overall() %>%
+  add_p() %>%
+  bold_p()
+t2b
+```
+
+```{r result}
+n1 = ipd
+n2 = round(median(dfipd$ageatvisit, na.rm = TRUE), digits = 0)
+n3 = nrow(filter(dfipd,sex=='Male'))
+n4 = percent(n3 / n1, accuracy = 0.1)
+ncd4 = nrow(filter(dfipd, absolute_cd4 < 200))
+n5 = median(dfipd$absolute_cd4, na.rm = TRUE)
+n6 = round(quantile(dfipd$absolute_cd4, probs = c(0,0.25,0.5,0.75,1), na.rm=TRUE)[2], digits = 0)
+n7 = round(quantile(dfipd$absolute_cd4, probs = c(0,0.25,0.5,0.75,1), na.rm=TRUE)[4], digits = 0)
+n8 = ipdsn
+n9 = percent(n8 / n1, accuracy = 0.1)
+n10 = ipdsp
+n11 = percent(n10 / n1, accuracy = 0.1)
+n12 = ipdsm
+n13 = percent(n12 / n1, accuracy = 0.1)
+n14 = nrow(filter(dfipd, afb == 0 & spu_cul == 1))
+n15 = nrow(filter(dfipd, afb == 0 & !is.na(spu_cul)))
+n16 = percent(n14 / n15, accuracy = 0.1)
+n17 = nrow(filter(dfipd, afb == 0 & bld_cul == 1))
+n18 = nrow(filter(dfipd, afb == 0 & !is.na(bld_cul)))
+n19 = percent(n17 / n18, accuracy = 0.1)
+n20 = nrow(filter(dfipd, afb == 0 & xpert == 1))
+n21 = nrow(filter(dfipd, afb == 0 & !is.na(xpert)))
+n22 = percent(n20 / n21, accuracy = 0.1)
+n23 = nrow(filter(dfipd, afb == 0 & lam == 'Positive'))
+n24 = nrow(filter(dfipd, afb == 0 & !is.na(lam)))
+n25 = percent(n23 / n24, accuracy = 0.1)
+n26 = nrow(filter(dfipd, afb == 0 & tb == 'Yes'))
+n27 = percent(n26 / n8, accuracy = 0.1)
+n28 = nrow(filter(dfipd, afb == 0 & tb == 'Yes' & tb_def == 1))
+n29 = percent(n28 / n26, accuracy = 0.1)
+n30 = nrow(filter(dfipd, afb == 0 & tb == 'Yes' & tb_def == 2))
+n31 = percent(n30 / n26, accuracy = 0.1)
+n32 = percent(ipdsnptpos / ipdsnpt, accuracy = 0.1)
+n33 = ipdsnptpos
+n34 = ipdsnpt
+n35 = nrow(dfipdsnpt %>% filter(tx_time >= 0))
+```
+
+**Results**
+
+Of `r n1` PLHIV admitted in IPD, `r n3` (`r n4`) were male, and the median age was `r n2`, and ``. Median CD4-count was `r n5` cells/mm3 \[interquartile range (IQR), `r n6`-`r n7` cells/mm3\], `r n8` (`r n9`) were sputum AFB-negative, `r n10` (`r n11`) were sputum AFB positive, and `r n12` missing (`r n13`). Of `r n8` PLHIV with sputum AFB negative, `r n14`/`r n15` (`r n16`) were sputum culture-positive, `r n17`/`r n18` (`r n19`) blood-culture positive, `r n20`/`r n21` (`r n22`) GeneXpert positive, and `r n23`/`r n24` (`r n25`) LAM-positive. Of `r n8`, `r n26` (`r n27`) were TB cases, including `r n28` (`r n29`) definite TB and `r n30` (`r n31`) probable TB. The LAM sensitivity was `r n32` (`r n33`/`r n34`) among IPD SNPT PLHIV. Of `r n26` cases, `r n34` were pulmonary or disseminated TB. We included `r n35` whose TB treatment was initiated after performing LF-LAM. Outcomes among IPD PLHIV with LF-LAM positive and negative are shown in the table.
+
+```{r}
+dfipd %>%
+  mutate(
+    on = factor(
+      on_arv,
+      levels = 0:3,
+      labels = c('No', 'No, experienced and stopped ART', 'Yes', 'No, restarted ART')
+    )
+  ) %>%
+  tbl_summary(
+    include = c(on),
+    label = list(
+      on ~ 'Current Antiretroviral medication'
+    )
+  )
+dfipdsnpt %>%
+  mutate(
+    on = factor(
+      on_arv,
+      levels = 0:3,
+      labels = c('No', 'No, experienced and stopped ART', 'Yes', 'No, restarted ART')
+    )
+  ) %>%
+  tbl_summary(
+    include = c(on),
+    label = list(
+      on ~ 'Current Antiretroviral medication'
+    )
+  )
+dfipdsnpt %>%
+  filter(tx_time >= 0) %>% 
+  mutate(
+    on = factor(
+      on_arv,
+      levels = 0:3,
+      labels = c('No', 'No, experienced and stopped ART', 'Yes', 'No, restarted ART')
+    )
+  ) %>%
+  tbl_summary(
+    include = c(on),
+    label = list(
+      on ~ 'Current Antiretroviral medication'
+    )
+  )
+
+```

@@ -1,0 +1,129 @@
+---
+title: "Factors associated with LF-LAM positivity among PLHIV with TB disease"
+format: html
+editor: visual
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+echo = FALSE,
+message = FALSE,
+warning = FALSE,
+cache = FALSE
+)
+
+# Load required packages
+source(here::here('code', 'libraries.R'))
+source(here::here('code', 'functions.R'))
+
+#theme_gtsummary_journal(journal = "jama")
+theme_gtsummary_compact()
+```
+
+```{r data}
+# Import and prepare data
+source(here('code', 'tbdata.R'))
+```
+
+```{r freq}
+# Frequency table
+t_freq <- dftb %>%
+  select(lam,
+         sex,
+         agegrp,
+         nationgrp,
+         cd4grp,
+         fever:weight_loss,
+         has_oi,
+         patient_type,
+         cxr,
+         site) %>%
+  tbl_summary(
+    by = lam,
+    digits = list(all_categorical() ~ c(0, 1)),
+    missing = "no"
+  ) %>%
+  # add_n() %>%
+  add_overall() %>% 
+  bold_labels() %>%
+  modify_header(update = list(all_stat_cols() ~ "**{level}**<br>N = {n}"))
+```
+
+```{r uni}
+# Univariate table
+t_uni <- dftb %>%
+  select(
+    lam0,
+    h_code,
+    sex,
+    agegrp,
+    nationgrp,
+    cd4grp,
+    fever,
+    sweat,
+    cough,
+    hemoptysis,
+    weight_loss,
+    has_oi,
+    patient_type,
+    cxr,
+    site
+  ) %>%
+  tbl_uvregression(
+    method = my_geeglm,
+    y = lam0,
+    include = -h_code,
+    method.args = list(
+      family = binomial,
+      id = h_code,
+      corstr = "independence"
+    ),
+    exponentiate = TRUE,
+    show_single_row = c(fever, sweat, cough, hemoptysis, weight_loss, has_oi),
+    hide_n = TRUE
+  ) %>%
+  # add_global_p(anova_fun = tidy_wald_test) %>%
+  bold_p() %>%
+  modify_table_styling(
+    columns = c(estimate),
+    rows = reference_row %in% TRUE,
+    missing_symbol = "Ref."
+  ) %>% 
+  modify_table_styling(
+    columns = c(ci),
+    rows = reference_row %in% TRUE,
+    missing_symbol = ""
+  )
+```
+
+```{r multi}
+# Stepwise selection
+source(here('code', 'gee_step.R'))
+# Multivariate table of final model
+t_multi <- 
+  tbl_regression(
+    step3,
+    exponentiate = TRUE,
+    show_single_row = c(weight_loss, has_oi)
+  ) %>%
+  # add_global_p(anova_fun = tidy_wald_test) %>%
+  bold_p() %>%
+  modify_table_styling(
+    columns = c(estimate),
+    rows = reference_row %in% TRUE,
+    missing_symbol = "Ref."
+  ) %>% 
+  modify_table_styling(
+    columns = c(ci),
+    rows = reference_row %in% TRUE,
+    missing_symbol = ""
+  )
+```
+
+```{r final}
+# Combine all tables
+tbl_merge(
+  list(t_freq, t_uni, t_multi),
+  tab_spanner = c("**LAM**", "**Univariate**", "**Multivariate**")
+)
+```
