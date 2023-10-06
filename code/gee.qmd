@@ -1,6 +1,8 @@
 ---
 title: "Factors associated with LF-LAM positivity among PLHIV with TB disease"
-format: html
+format:
+  html:
+    embed-resources: true
 editor: visual
 ---
 
@@ -82,7 +84,7 @@ t_uni <- dftb %>%
     show_single_row = c(fever, sweat, cough, hemoptysis, weight_loss, has_oi),
     hide_n = TRUE
   ) %>%
-  # add_global_p(anova_fun = tidy_wald_test) %>%
+  add_global_p(anova_fun = tidy_wald_test) %>%
   bold_p() %>%
   modify_table_styling(
     columns = c(estimate),
@@ -106,7 +108,7 @@ t_multi <-
     exponentiate = TRUE,
     show_single_row = c(weight_loss, has_oi)
   ) %>%
-  # add_global_p(anova_fun = tidy_wald_test) %>%
+  add_global_p(anova_fun = tidy_wald_test) %>%
   bold_p() %>%
   modify_table_styling(
     columns = c(estimate),
